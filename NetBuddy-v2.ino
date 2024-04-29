@@ -7,29 +7,26 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 
+// Button Configuration
 #define BUTTON_PREV_PIN 12
 #define BUTTON_NEXT_PIN 13
 #define BUTTON_SELECT_PIN 14
 
+// OLED Size Configuration
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
-
-#define LAN_TEST 0
-#define WIFI_TEST 1
-
-float downloadSpeed = 0.0; // Declare and initialize downloadSpeed
-
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-// Enter a MAC address for your controller below.
-// Newer Ethernet shields have a MAC address printed on a sticker on the shield
-byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
-
+// Menu Item Setup
+#define NUM_MENU_ITEMS 3
+int selectedItem = 0;
 // Menu items
 const char* menuItems[] = {"LAN Test", "Wifi Test", "Speed Test"};
 
-#define NUM_MENU_ITEMS 3
-int selectedItem = 0;
+// Ethernet Setup
+float downloadSpeed = 0.0; // Declare and initialize downloadSpeed
+
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED }; // Mac Address
 
 EthernetClient client;
 // Set the static IP address to use if the DHCP fails to assign
@@ -42,12 +39,32 @@ unsigned long lastLANRefresh = 0;
 const unsigned long LAN_REFRESH_INTERVAL = 15000;
 
 
-bool ethernetInitialized = false;
-int selectedOption = LAN_TEST;
-int selectedSSIDIndex = 0;
-int buttonBlock = 0;
+//speedtest
+// The file to get.
+//const char* url      = "https://192.168.1.1/1MB_file.bin";
+const char* url      = "http://raw.githubusercontent.com/rloucks/NetBuddy/main/1MB_file.bin";
+// How many times to get it per loop.
+int  num_downloads   = 10;
+int start_time       = micros();
+int end_time         = micros();
+int response_size    = 0; // Holds the size of the current chunk.
+int total_elapsed    = 0; // Holds the elapsed time counter for the loop.
+int chunk_elapsed    = 0; // Holds the time to download the current chunk.  Don't count non-200 status.
+float chunk_speed    = 0.0; // Holds the speed of the current chunk.
+float total_speed    = 0.0; // Holds the speed of the total download.
+int download_count   = 0; // This is the counter.  Preset to 0.
+int total_bytes      = 0; // Holds the total bytes transferred.
 
+char server[] = "httpbin.org"; // Domain name of the server
+
+
+// dont touch
+bool ethernetInitialized = false; // keeps the ethernet code from running until the LAN test or SpeedTest
+//int selectedOption = LAN_TEST; // inital selected option - cant remember if I need it :)
+int selectedSSIDIndex = 0; // starting index for the SSID scrollable list
+int buttonBlock = 0; // Keep the buttons from getting in the way
 bool wifiTestRequested = false; // Flag to indicate if Wifi Test is requested
+
 
 void setup() {
   pinMode(BUTTON_PREV_PIN, INPUT_PULLUP);
@@ -63,29 +80,32 @@ void setup() {
   display.display();
 
   Serial.begin(115200);
-
   while (!Serial);
 
   displayAnimation(); // Display opening logo animation
-    display.clearDisplay();
+  display.clearDisplay(); // clean up the display
   display.display();
-  displayMenu();
+  displayMenu(); // start the menu
   
 }
 void loop() {
-  while (buttonBlock < 1) {
+  while (buttonBlock < 1) { // only perform these actions if button block is not 1
+
+  // previous scroll  
   if (digitalRead(BUTTON_PREV_PIN) == LOW) {
     selectedItem = (selectedItem - 1 + NUM_MENU_ITEMS) % NUM_MENU_ITEMS;
     displayMenu();
     delay(200); // debounce
   }
 
+  // next scroll
   if (digitalRead(BUTTON_NEXT_PIN) == LOW) {
     selectedItem = (selectedItem + 1) % NUM_MENU_ITEMS;
     displayMenu();
     delay(200); // debounce
   }
 
+  // select and launch the next function
   if (digitalRead(BUTTON_SELECT_PIN) == LOW) {
     launchMenuItem(selectedItem);
     delay(200); // debounce
@@ -93,7 +113,7 @@ void loop() {
   }
 }
 
-void displayMenu() {
+void displayMenu() { // code or the menu display - runs on images from image.hpp file
   display.clearDisplay();
   switch(selectedItem) {
     case 0:
@@ -110,7 +130,7 @@ void displayMenu() {
   display.display();
 }
 
-void launchMenuItem(int index) {
+void launchMenuItem(int index) { // setup for each function to run on which menu item
   display.clearDisplay();
   display.setCursor(0, 10);
   display.println("Launching:");
@@ -128,18 +148,16 @@ void launchMenuItem(int index) {
   }
 }
 
-void initETH() {
-  
-   Serial.println("Starting Ethernet...");
+void initETH() {  // init the ethernet shield
+  Serial.println("Starting Ethernet...");
   Ethernet.init(5);   // MKR ETH Shield
- 
  
    if (Ethernet.begin(mac)) { // Dynamic IP setup
         Serial.println("DHCP OK!");
-            display.clearDisplay();
-            display.drawBitmap(0, 0, imgethconnected, SCREEN_WIDTH, SCREEN_HEIGHT, WHITE);
-        displayLANInfo();
-    } else {
+            //display.clearDisplay();
+            //display.drawBitmap(0, 0, imgethconnected, SCREEN_WIDTH, SCREEN_HEIGHT, WHITE);
+            delay(500);
+            } else {
         Serial.println("Failed to configure Ethernet using DHCP");
         // Check for Ethernet hardware present
         if (Ethernet.hardwareStatus() == EthernetNoHardware) {
@@ -150,20 +168,23 @@ void initETH() {
         }
         if (Ethernet.linkStatus() == LinkOFF) {
           Serial.println("Ethernet cable is not connected.");
-            display.clearDisplay();
-            display.drawBitmap(0, 0, imgethdisco1, SCREEN_WIDTH, SCREEN_HEIGHT, WHITE);
-        }
- 
+            //display.clearDisplay();
+            //display.drawBitmap(0, 0, imgethdisco1, SCREEN_WIDTH, SCREEN_HEIGHT, WHITE);
+            delay(5000);
+        } 
           IPAddress ip(MYIPADDR);
           IPAddress dns(MYDNS);
           IPAddress gw(MYGW);
           IPAddress sn(MYIPMASK);
           Ethernet.begin(mac, ip, dns, gw, sn);
           Serial.println("STATIC OK!");
+            //display.clearDisplay();
+            //display.drawBitmap(0, 0, imgethconnected, SCREEN_WIDTH, SCREEN_HEIGHT, WHITE);
+            delay(500);
         }
 }
 
-void runLANTest() {
+void runLANTest() { // doesnt get any simpler than this
           initETH();         
           displayLANInfo();
 }
@@ -187,45 +208,58 @@ void displayLANInfo() {
 
 
 void runWIFITest() {
-  
   int numNetworks = WiFi.scanNetworks();
   if (numNetworks == 0) return;
   buttonBlock = 1;
+  unsigned long lastRefreshTime = 0; // Variable to store the last time the RSSI was refreshed
+  int r = 0; // Initialize r outside of the loop to persist its value
 
   while (true) {
     if (digitalRead(BUTTON_PREV_PIN) == LOW) {
       selectedSSIDIndex = (selectedSSIDIndex == 0) ? numNetworks - 1 : selectedSSIDIndex - 1;
       display.clearDisplay();
       delay(200);
-      
     }
 
     if (digitalRead(BUTTON_NEXT_PIN) == LOW) {
       selectedSSIDIndex = (selectedSSIDIndex + 1) % numNetworks;
       display.clearDisplay();
       delay(200);
-      
     }
-   if (digitalRead(BUTTON_SELECT_PIN) == LOW) {
-    buttonBlock = 0;
-    delay(200); // debounce
-  }
 
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 0);
-    display.print(selectedSSIDIndex);
-    display.println(" of ");
-    display.println(numNetworks);
+    if (digitalRead(BUTTON_SELECT_PIN) == LOW) {
+      buttonBlock = 0;
+      delay(200); // debounce
+    } else {
 
-    display.print("SSID: ");
-    display.println(WiFi.SSID(selectedSSIDIndex));
-    display.print("RSSI: ");
-    display.println(WiFi.RSSI(selectedSSIDIndex));
-    display.print("MAC: ");
-    display.println(WiFi.BSSIDstr(selectedSSIDIndex));
-    display.display();
+    // Check if 5 seconds have passed since the last RSSI refresh
+    if (millis() - lastRefreshTime >= 5000) {
+      WiFi.scanNetworks(); // Refresh the WiFi scan
+      lastRefreshTime = millis(); // Update the last refresh time
+
+      display.clearDisplay();
+      display.setTextSize(1);
+      display.setTextColor(SSD1306_WHITE);
+      display.setCursor(0, 0);
+      display.println(WiFi.SSID(selectedSSIDIndex));
+      display.print(selectedSSIDIndex);
+      display.print(" of ");
+      display.println(numNetworks);
+      
+      // Print the countdown for RSSI update
+      //display.setCursor(0, 8);
+      //display.print("       R: ");
+      //display.print(5 - (millis() - lastRefreshTime) / 1000); // Countdown from 5 seconds
+
+
+      display.println("--------------------");
+      display.print("RSSI: ");
+      display.println(WiFi.RSSI(selectedSSIDIndex));
+      display.println("MAC Address: ");
+      display.print(WiFi.BSSIDstr(selectedSSIDIndex));
+      display.display();
+    }
+    }
   }
 }
 
@@ -333,35 +367,152 @@ void displayAniSpeedtest() {
   }
 }
 
-float runSpeedTest() {
-
+void runSpeedTest() {
+  initETH(); 
+  const int numTests = 5; // Number of tests to perform
+  float downloadSpeeds[numTests]; // Array to store download speeds
   display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
-  display.println("Download Speed:");
-  downloadSpeed = getDownloadSpeed(); // Update download speed
-  display.print(downloadSpeed);
-  display.println(" Mbps");
+  display.print("Running Test # 1...");
   display.display();
-  delay(5000);
+  
+  for (int i = 0; i < numTests; i++) {
+  
+  
 
-}
+  if (client.connect(server, 80)) { // Connect to server
+    client.println("GET /range/102400 HTTP/1.1");
+    client.println("Host: httpbin.org");
+    client.println("Connection: close");
+    client.println();
+    
+       // Start time measurement
+      unsigned long startTime = millis();
+      
+      // Wait for server response headers
+      unsigned long timeout = millis();
+      while (!client.available() && millis() - timeout < 5000) {
+        delay(100);
+      }
+      
+      if (!client.available()) {
+        Serial.println("No response from server");
+        return;
+      }
+      
+      // Read response data byte by byte and calculate dataSize
+      int dataSize = 0;
+      while (client.connected()) {
+        if (client.available()) {
+          client.read(); // Read and discard the byte
+          dataSize++;    // Increment dataSize
+        }
+      }
+      
+      // End time measurement
+      unsigned long endTime = millis();
+      
+      // Calculate download time in milliseconds
+      unsigned long downloadTime = endTime - startTime;
+      
+      // Convert dataSize to kilobits
+      float dataSizeKbps = (dataSize * 8.0) / 1000.0; // Convert bytes to kilobits
+      
+      // Calculate download speed in kbps
+      float downloadSpeedKbps = dataSizeKbps / (downloadTime / 1000.0); // Convert milliseconds to seconds
+      
+      // Store download speed in array
+      downloadSpeeds[i] = downloadSpeedKbps;
+      
+      // Close the connection
+      client.stop();
+      display.clearDisplay();
+      display.setCursor(0, 0);
+      display.print("Results Test # ");
+      display.println(i+1);
+      display.println("----------------");
+  
+      display.print("Size: ");
+      display.print(dataSize);
+      display.println(" bytes");
+      
+      display.print("Speed: ");
+      display.print(downloadSpeedKbps);
+      display.println(" kbps");
+      display.display();
+      
+      display.println("");
+      display.println("");
+      display.println("");
+      if (i == 4) {
+      display.print("Finlizing Results...");
+      display.println("...");
+      display.display();
+      } else {        
+      display.print("Running Test # ");
+      display.print(i+2);
+      display.println("...");
+      display.display();
 
-float getDownloadSpeed() {
-  initETH();
-  HTTPClient http;
-  http.begin("https://fast.com/download");
-  int httpCode = http.GET();
-  if (httpCode == HTTP_CODE_OK) {
-    String payload = http.getString();
-    // Parse the response to extract the download speed
-    int startPos = payload.indexOf("speed-value") + 13; // Position of the speed value
-    int endPos = payload.indexOf("</span>", startPos);
-    String speedString = payload.substring(startPos, endPos);
-    return speedString.toFloat();
-  } else {
-    Serial.printf("Error getting download speed: %d\n", httpCode);
-    return -1.0;
+      }
+      
+      delay(5000); // Wait for 5 seconds before making the next request
+    } else {
+      Serial.println("Connection failed");
+      delay(1000);
+      return;
+    }
   }
+  
+  // Calculate average, maximum, and minimum download speeds
+  float totalSpeed = 0;
+  float maxSpeed = downloadSpeeds[0];
+  float minSpeed = downloadSpeeds[0];
+  
+  for (int i = 0; i < numTests; i++) {
+    totalSpeed += downloadSpeeds[i];
+    if (downloadSpeeds[i] > maxSpeed) {
+      maxSpeed = downloadSpeeds[i];
+    }
+    if (downloadSpeeds[i] < minSpeed) {
+      minSpeed = downloadSpeeds[i];
+    }
+  }
+  
+  float averageSpeed = totalSpeed / numTests;
+  
+  // Print statistics to serial monitor
+  Serial.print("Average download speed: ");
+  Serial.print(averageSpeed);
+  Serial.println(" kbps");
+  
+  Serial.print("Maximum download speed: ");
+  Serial.print(maxSpeed);
+  Serial.println(" kbps");
+  
+  Serial.print("Minimum download speed: ");
+  Serial.print(minSpeed);
+  Serial.println(" kbps");
+  
+  // Display statistics on OLED
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.println("Speed test results");
+  display.println("--------------------");
+  display.println("");
+  display.print("Average: ");
+  display.print(averageSpeed);
+  display.println(" kbps");
+  
+  display.print("Max: ");
+  display.print(maxSpeed);
+  display.println(" kbps");
+  
+  display.print("Min: ");
+  display.print(minSpeed);
+  display.println(" kbps");
+  display.display();
+  
+  delay(60000);
 }
+ 
